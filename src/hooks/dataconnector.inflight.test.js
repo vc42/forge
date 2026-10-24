@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 const {warn} = vi.hoisted(() => ({warn: vi.fn()}));
 
-vi.mock('../core', () => ({
+vi.mock('../core/index.js', () => ({
     useSetting: () => ({ endpoints: {}, useAuth: () => ({}), targetContext: {} }),
 }));
 
@@ -223,4 +223,168 @@ it('explicit fresh metadata reads bypass pending GET sharing and browser respons
  const completions=[];global.fetch=vi.fn(()=>new Promise(resolve=>completions.push(()=>resolve({ok:true,json:async()=>({fresh:true})}))));
  const connector=createDataConnector({service:{URL:'/v1/workspace/metadata',method:'GET'}},{endpoints:{},targetContext:{},auth:{}});
  const normal=connector.get({}),fresh=connector.get({fresh:true});expect(global.fetch).toHaveBeenCalledTimes(2);expect(global.fetch.mock.calls[0][1]).not.toHaveProperty('cache');expect(global.fetch.mock.calls[1][1].cache).toBe('no-store');for(const complete of completions)complete();await normal;await fresh;
+});
+
+describe('datasource read overlap', () => {
+    const runtime = () => ({auth: {}, targetContext: {actorRef: 'user-a'}});
+    const datasource = (id = 'audience_lookup') => ({
+        id,
+        service: {URL: `/v1/api/datasources/${id}/fetch`, method: 'POST'},
+        paging: {enabled: true, size: 20, parameters: {page: 'Page', size: 'Limit'}},
+    });
+    function pendingFetch() {
+        const releases = [];
+        const response = {rows: [{id: 1}], dataInfo: {totalCount: 20}};
+        vi.stubGlobal('fetch', vi.fn(() => new Promise(resolve => {
+            releases.push(() => resolve({ok: true, status: 200, json: async () => response}));
+        })));
+        return () => releases.splice(0).forEach(release => release());
+    }
+
+    it('shares an identical datasource POST read across connectors in one runtime', async () => {
+        const release = pendingFetch();
+        const scope = runtime();
+        const first = createDataConnector(datasource(), scope).get({page: 1});
+        const second = createDataConnector(datasource(), scope).get({page: 1});
+        const calls = fetch.mock.calls.length;
+        release();
+        const [a, b] = await Promise.all([first, second]);
+        expect(calls).toBe(1);
+        expect(a).toEqual(b);
+        expect(a).not.toBe(b);
+        a.rows[0].id = 99;
+        expect(b.rows[0].id).toBe(1);
+    });
+
+    it.each(['filter', 'page', 'projection', 'cache', 'invocation'])('keeps different %s requests separate', async difference => {
+        const release = pendingFetch();
+        const connector = createDataConnector(datasource(), runtime());
+        const changed = {
+            filter: {filter: {AdOrderId: [42]}},
+            page: {page: 2},
+            projection: {inputParameters: {Fields: ['audienceId']}},
+            cache: {cache: {bypassCache: true}},
+            invocation: {invocationId: 'another-call'},
+        }[difference];
+        const first = connector.get({page: 1});
+        const second = connector.get({page: 1, ...changed});
+        const calls = fetch.mock.calls.length;
+        release(); await Promise.all([first, second]);
+        expect(calls).toBe(2);
+    });
+
+    it('separates runtime authorization scopes even with cookie authentication', async () => {
+        const release = pendingFetch();
+        const first = createDataConnector(datasource(), runtime()).get({page: 1});
+        const second = createDataConnector(datasource(), runtime()).get({page: 1});
+        const calls = fetch.mock.calls.length;
+        release(); await Promise.all([first, second]); expect(calls).toBe(2);
+    });
+
+    it('separates prepared bearer credentials and provider identities', async () => {
+        const release = pendingFetch();
+        const scope = runtime();
+        let user = 'user-a';
+        scope.prepareRequest = ({headers, body}) => {
+            headers.Authorization = `Bearer ${user}`;
+            body.providerIdentity = user;
+        };
+        const connector = createDataConnector(datasource(), scope);
+        const first = connector.get({}); user = 'user-b';
+        const second = connector.get({});
+        const calls = fetch.mock.calls.length;
+        release(); await Promise.all([first, second]); expect(calls).toBe(2);
+    });
+
+    it('does not share independently cancellable reads or mutation POSTs', async () => {
+        const release = pendingFetch();
+        const connector = createDataConnector(datasource(), runtime());
+        const signal = new AbortController().signal;
+        const reads = [connector.get({signal}), connector.get({signal})];
+        const writes = [connector.post({body: {id: 1}}), connector.post({body: {id: 1}})];
+        const calls = fetch.mock.calls.length;
+        release(); await Promise.all([...reads, ...writes]); expect(calls).toBe(4);
+    });
+
+    it('starts a fresh request after completion and after a shared failure', async () => {
+        let attempt = 0;
+        vi.stubGlobal('fetch', vi.fn(async () => {
+            if (++attempt === 1) throw new Error('backend unavailable');
+            return {ok: true, status: 200, json: async () => ({rows: []})};
+        }));
+        const connector = createDataConnector(datasource(), runtime());
+        const results = await Promise.allSettled([connector.get({}), connector.get({})]);
+        expect(results.every(result => result.status === 'rejected')).toBe(true);
+        await connector.get({});
+        await connector.get({});
+        expect(fetch).toHaveBeenCalledTimes(3);
+    });
+});
+
+
+describe('datasource read sharing boundaries', () => {
+    function responseGate() {
+        const resolvers = [];
+        vi.stubGlobal('fetch', vi.fn(() => new Promise(resolve => resolvers.push(resolve))));
+        return () => resolvers.forEach(resolve => resolve({ok: true, status: 200, json: async () => ({rows: []})}));
+    }
+    const ds = {id: 'lookup', service: {URL: '/v1/api/datasources/lookup/fetch', method: 'POST'}};
+
+    it('normalizes object key order while preserving argument values', async () => {
+        const release = responseGate();
+        const connector = createDataConnector(ds, {});
+        const first = connector.get({filter: {Name: 'A', Id: [2, 1]}});
+        const second = connector.get({filter: {Id: [2, 1], Name: 'A'}});
+        const calls = fetch.mock.calls.length;
+        release(); await Promise.all([first, second]); expect(calls).toBe(1);
+    });
+
+    it('keeps different serialized Date arguments separate', async () => {
+        const release = responseGate();
+        const connector = createDataConnector(ds, {});
+        const first = connector.get({inputParameters: {From: new Date('2026-10-22T00:00:00Z')}});
+        const second = connector.get({inputParameters: {From: new Date('2026-10-23T00:00:00Z')}});
+        const calls = fetch.mock.calls.length;
+        release(); await Promise.all([first, second]);
+        expect(calls).toBe(2);
+    });
+
+    it('shares arguments that serialize to the same wire body', async () => {
+        const release = responseGate();
+        const connector = createDataConnector(ds, {});
+        const first = connector.get({inputParameters: {From: new Date('2026-10-22T00:00:00Z')}});
+        const second = connector.get({inputParameters: {From: '2026-10-22T00:00:00.000Z'}});
+        const calls = fetch.mock.calls.length;
+        release(); await Promise.all([first, second]);
+        expect(calls).toBe(1);
+    });
+
+    it.each(['credential', 'provider', 'conversation', 'resource', 'actor'])('does not share after a prepared %s change', async changed => {
+        const release = responseGate();
+        let value = 'first';
+        const scope = {targetContext: {actorRef: 'actor-a'}, prepareRequest: ({headers, body}) => {
+            if (changed === 'credential') headers.Authorization = `Bearer ${value}`;
+            if (changed === 'provider') body.providerIdentity = value;
+            if (changed === 'conversation') body.conversationId = value;
+            if (changed === 'resource') body.reference = {owner: {uri: 'forge://workspace', revision: value}};
+        }};
+        const connector = createDataConnector(ds, scope);
+        const first = connector.get({});
+        value = 'second'; if (changed === 'actor') scope.targetContext.actorRef = 'actor-b';
+        const second = connector.get({});
+        const calls = fetch.mock.calls.length;
+        release(); await Promise.all([first, second]); expect(calls).toBe(2);
+    });
+
+    it.each(['uncached', 'other-post', 'other-datasource'])('does not combine %s operations', async kind => {
+        const release = responseGate();
+        const scope = {};
+        const config = kind === 'uncached' ? {...ds, cache: {enabled: false}}
+            : kind === 'other-post' ? {...ds, service: {URL: '/v1/api/command', method: 'POST'}} : ds;
+        const first = createDataConnector(config, scope).get({});
+        const other = kind === 'other-datasource' ? {...ds, id: 'other', service: {...ds.service, URL: '/v1/api/datasources/other/fetch'}} : config;
+        const second = createDataConnector(other, scope).get({});
+        const calls = fetch.mock.calls.length;
+        release(); await Promise.all([first, second]); expect(calls).toBe(2);
+    });
 });

@@ -1,4 +1,4 @@
-import { dataSourceEvents, dialogHandlers, useControlEvents, useToolbarControlEvents } from './event.js';
+import { tableHandlers, dataSourceEvents, dialogHandlers, useControlEvents, useToolbarControlEvents } from './event.js';
 import assert from 'node:assert/strict';
 
 const createContext = (calls) => {
@@ -233,3 +233,19 @@ for (const type of ['checkbox', 'toggle']) {
  handlers.files.events.onChange({target:{value:'C:\\fakepath\\a.mp4'}});
  assert.equal(current,encoded);assert.equal(observed,encoded);
 }
+
+{
+    const calls = [];
+    const context = {identity: {dataSourceId: 'lookup'}, initialFetchOwner: 'lookup', dataSource: {}, signals: {message: {value: [], peek: () => []}}, lookupHandler: id => () => calls.push(id)};
+    tableHandlers(context, {table: {}}).onInit.execute({});
+    assert.deepEqual(calls, [], 'a dialog-owned table must not issue an implicit initial read');
+    tableHandlers(context, {table: {on: [{event: 'onInit', handler: 'custom.prepare'}]}}).onInit.execute({});
+    assert.deepEqual(calls, ['custom.prepare'], 'authored initialization must still run');
+    tableHandlers({...context, initialFetchOwner: 'another-source'}, {table: {}}).onInit.execute({});
+    assert.deepEqual(calls, ['custom.prepare', 'dataSource.fetchCollection'], 'other tables keep their default fetch');
+    tableHandlers({...context, initialFetchOwner: undefined}, {table: {}}).onInit.execute({});
+    assert.equal(calls.length, 3, 'ordinary tables retain their default fetch');
+    tableHandlers({...context, identity: undefined, initialFetchOwner: undefined}, {table: {}}).onInit.execute({});
+    assert.equal(calls.length, 4, 'contexts without an ownership marker retain the default fetch');
+}
+console.log('table initial read ownership passed');

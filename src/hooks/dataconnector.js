@@ -6,6 +6,20 @@ import { resolvePagingValues, withPagingInputs, withPagingSize } from "./paging.
 import { buildDatasourceFetchPayload } from "./datasourceRequest.js";
 
 const inFlightGetRequests = new Map();
+// A runtime belongs to one window/authorization snapshot. Cookie-authenticated
+// reads must never join requests from another runtime merely because the URL
+// and visible headers happen to match.
+const inFlightDatasourceRequests = new WeakMap();
+
+function stableRequestValue(value) {
+    if (Array.isArray(value)) return value.map(stableRequestValue);
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, stableRequestValue(value[key])]));
+}
+
+function cloneReadResponse(value) {
+    return value == null ? value : JSON.parse(JSON.stringify(value));
+}
 
 function appendQueryParams(url, queryParams) {
     const encoded = queryParams?.toString?.() || '';
@@ -54,6 +68,12 @@ export function createDataConnector(dataSource, runtime = {}) {
         prepareRequest,
     } = runtime || {};
     const {authStates, defaultAuthProvider} = auth;
+    const runtimeScope = runtime && typeof runtime === 'object' ? runtime : {};
+    let datasourceRequests = inFlightDatasourceRequests.get(runtimeScope);
+    if (!datasourceRequests) {
+        datasourceRequests = new Map();
+        inFlightDatasourceRequests.set(runtimeScope, datasourceRequests);
+    }
     const {paging, parameters = []} = dataSource;
 
     function notifyUnauthorized(error) {
@@ -368,11 +388,24 @@ export function createDataConnector(dataSource, runtime = {}) {
             }
             const log = getLogger('connector');
             try { log.debug('[request]', { method, url: finalUrl, request }); } catch(_) {}
-            const requestKey = requestMethod === 'GET' && !signal && fresh !== true
-                ? JSON.stringify({ url: finalUrl, headers: request.headers || {} })
-                : '';
-            if (requestKey && inFlightGetRequests.has(requestKey)) {
-                return inFlightGetRequests.get(requestKey);
+            const isSharedDatasourceRead = request.method === 'POST' && isDatasourceFetchRoute
+                && typeof request.body === 'string' && dataSource?.cache?.enabled !== false && !signal && fresh !== true;
+            const pendingRequests = isSharedDatasourceRead ? datasourceRequests : inFlightGetRequests;
+            const requestKey = isSharedDatasourceRead
+                ? JSON.stringify(stableRequestValue({
+                    method: request.method,
+                    url: finalUrl,
+                    headers: request.headers || {},
+                    body: JSON.parse(request.body),
+                    actorRef: targetContext?.actorRef || '',
+                    authProvider: dataSource.authProvider || defaultAuthProvider || '',
+                }))
+                : request.method === 'GET' && !signal && fresh !== true
+                    ? JSON.stringify({url: finalUrl, headers: request.headers || {}})
+                    : '';
+            if (requestKey && pendingRequests.has(requestKey)) {
+                const result = await pendingRequests.get(requestKey);
+                return isSharedDatasourceRead ? cloneReadResponse(result) : result;
             }
             const performRequest = (async () => {
                 const resp = await fetch(finalUrl, request);
@@ -386,13 +419,14 @@ export function createDataConnector(dataSource, runtime = {}) {
                 return json;
             })();
             if (requestKey) {
-                inFlightGetRequests.set(requestKey, performRequest);
+                pendingRequests.set(requestKey, performRequest);
             }
             try {
-                return await performRequest;
+                const result = await performRequest;
+                return isSharedDatasourceRead ? cloneReadResponse(result) : result;
             } finally {
                 if (requestKey) {
-                    inFlightGetRequests.delete(requestKey);
+                    pendingRequests.delete(requestKey);
                 }
             }
         } catch (err) {

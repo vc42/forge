@@ -43,3 +43,9 @@ export function dialogFreshFormSeed(dataSource = {}, currentCollection = []) {
         : (Array.isArray(currentCollection) ? currentCollection[0] : null);
     return source && typeof source === 'object' ? {...source} : {};
 }
+
+// Lookup opens can use the datasource TTL. Other dialogs retain their fresh
+// read policy, including forms that reopen after a mutation.
+export function dialogOpenCacheOptions(callerProps = {}) {
+    return callerProps?.cacheOnOpen === true ? null : {bypassCache: true};
+}

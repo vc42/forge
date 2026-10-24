@@ -35,7 +35,7 @@ import DataSource from './DataSource.jsx';
 import MessageBus from './MessageBus.jsx';
 import WindowLayout from './WindowLayout.jsx';
 import ViewDialog from './ViewDialog.jsx';
-import {openWindowPickerDialog} from './windowPickerDialog.js';
+import {openWindowPickerDialog, pickerDialogReadOwner} from './windowPickerDialog.js';
 import DataSourceContainer from './WindowContentDataSourceContainer.jsx';
 
 import {createDataConnector} from '../hooks/dataconnector.js';
@@ -1001,10 +1001,12 @@ function WindowContentInner({window, metadata, services}) {
         } catch (_) {}
         return resolvedRefs;
     }, [metadata, defaultDataSourceRef, windowFormSnapshot, liveWindowView]);
-    const deferredDataSourceRefs = useMemo(
-        () => resolveDeferredDataSourceRefs(metadata, defaultDataSourceRef, windowFormSnapshot, liveWindowView),
-        [metadata, defaultDataSourceRef, windowFormSnapshot, liveWindowView],
-    );
+    const deferredDataSourceRefs = useMemo(() => {
+        const refs = resolveDeferredDataSourceRefs(metadata, defaultDataSourceRef, windowFormSnapshot, liveWindowView);
+        const pickerOwner = pickerDialogReadOwner(window, metadata, defaultDataSourceRef);
+        if (pickerOwner) refs.add(pickerOwner);
+        return refs;
+    }, [metadata, defaultDataSourceRef, windowFormSnapshot, liveWindowView, window.pickerDialogId]);
     const fetcherOwnedDataSourceRefs = useMemo(
         () => new Set(resolveFetcherOwnedDataSourceRefs(metadata, windowFormSnapshot, liveWindowView)),
         [metadata, windowFormSnapshot, liveWindowView],
@@ -1090,9 +1092,12 @@ function WindowContentInner({window, metadata, services}) {
 
     const renderDataSources = () => {
         if (!context) return null;
+        // ViewDialog mounts the picker's primary reader. A second window-level
+        // reader misinterprets its loading flag as interrupted work and replays it.
+        const pickerOwner = pickerDialogReadOwner(window, metadata, defaultDataSourceRef);
         return (
             <>
-                {requiredDataSourceRefs.map((key) => (
+                {requiredDataSourceRefs.filter(key => key !== pickerOwner).map((key) => (
                     <DataSourceContainer
                         key={key}
                         windowContext={context}

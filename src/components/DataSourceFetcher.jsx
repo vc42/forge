@@ -21,16 +21,17 @@ export default function DataSourceFetcher({
 }) {
     const log = getLogger('ds');
     const dataSourceId = context?.identity?.dataSourceId || context?.identity?.dataSourceRef || '';
+    const fetchOwnedByParent = context?.initialFetchOwner === dataSourceId;
     // 1. trigger collection fetch when component mounts (optional)
     useEffect(() => {
         const control = context?.signals?.control?.peek?.() || {};
-        if (shouldFetchDataSourceOnMount({fetchData, fetchOnce, control})) {
+        if (shouldFetchDataSourceOnMount({fetchData, fetchOnce, control, fetchOwnedByParent})) {
             try { log.debug('[fetcher] fetch on mount', { ds: context?.identity?.dataSourceRef }); } catch(_) {}
             context?.handlers?.dataSource?.fetchCollection?.();
         } else {
             try { log.debug('[fetcher] fetch disabled', { ds: context?.identity?.dataSourceRef }); } catch(_) {}
         }
-    }, [dataSourceId, fetchData, fetchOnce]);
+    }, [dataSourceId, fetchData, fetchOnce, fetchOwnedByParent]);
 
     // 2. once collection has items, optionally set selection to first row
     useSignalEffect(() => {

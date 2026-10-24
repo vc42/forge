@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {openWindowPickerDialog} from './windowPickerDialog.js';
+import {openWindowPickerDialog, pickerDialogReadOwner} from './windowPickerDialog.js';
 const record={adOrderId:42,adOrderName:'Original'};
 let received,committed,closed=0;
 const context={handlers:{window:{openDialog:async args=>{received=args;return record},commit:args=>committed=args,closeWindow:()=>closed++}}};
@@ -9,3 +9,12 @@ assert.equal(received.execution.args[0],'adOrderPicker');assert.deepEqual(receiv
 await assert.rejects(openWindowPickerDialog(window,{dialogs:[{id:'foreign'}]},context),/owning window bundle/);
 context.handlers.window.openDialog=async()=>({status:'canceled',canceled:true});
 await openWindowPickerDialog(window,{dialogs:[{id:'adOrderPicker'}]},context);assert.equal(closed,1);
+
+assert.equal(received.execution.args[1].cacheOnOpen, true);
+const pickerMetadata = {dataSource: {orders: {}, other: {}}, dialogs: [{id: 'picker', dataSourceRef: 'orders'}]};
+assert.equal(pickerDialogReadOwner({pickerDialogId: 'picker'}, pickerMetadata), 'orders');
+assert.equal(pickerDialogReadOwner({}, pickerMetadata), '');
+assert.equal(pickerDialogReadOwner({pickerDialogId: 'missing'}, pickerMetadata), '');
+assert.equal(pickerDialogReadOwner({pickerDialogId: 'picker'}, {...pickerMetadata, dialogs: [{id: 'picker', fetchOnOpen: false, dataSourceRef: 'orders'}]}), '');
+assert.equal(pickerDialogReadOwner({pickerDialogId: 'picker'}, {dataSource: {}, dialogs: pickerMetadata.dialogs}), '');
+console.log('picker reads are owned by their dialog; ordinary windows retain automatic priming');

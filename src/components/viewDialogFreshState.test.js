@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {consumeDialogFocusRevision, dialogFreshFormSeed, inlineDialogSeedRows, shouldFetchDialogOnOpen, shouldRefreshDialogDataSourceForMount, shouldRefreshDialogDataSourceOnOpen} from './viewDialogFreshState.js';
+import {dialogOpenCacheOptions, consumeDialogFocusRevision, dialogFreshFormSeed, inlineDialogSeedRows, shouldFetchDialogOnOpen, shouldRefreshDialogDataSourceForMount, shouldRefreshDialogDataSourceOnOpen} from './viewDialogFreshState.js';
 
 assert.equal(shouldFetchDialogOnOpen({content: {fetchData: false}}), false);
 assert.equal(shouldFetchDialogOnOpen({content: {fetchData: true}}), true);
@@ -40,3 +40,8 @@ clonedSeed.saved = true;
 assert.equal(runtimeSeed[0].saved, false);
 
 console.log('viewDialogFreshState ✓ dialog datasources refresh on every open unless explicitly preserved');
+
+assert.equal(dialogOpenCacheOptions({cacheOnOpen: true}), null);
+assert.deepEqual(dialogOpenCacheOptions(), {bypassCache: true});
+assert.deepEqual(dialogOpenCacheOptions({cacheOnOpen: false}), {bypassCache: true});
+console.log('lookup opens honor TTL; other dialogs retain fresh-open reads');

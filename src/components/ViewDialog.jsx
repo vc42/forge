@@ -6,6 +6,7 @@ import DataSource from './DataSource.jsx';
 import DataSourceContainer from './WindowContentDataSourceContainer.jsx';
 import {dialogDataSourceRefs} from './dialogDataSourceRefs.js';
 import MessageBus from './MessageBus.jsx';
+import RefreshAction from './table/basic/RefreshAction.jsx';
 import {useSignalEffect, useSignals} from '@preact/signals-react/runtime';
 import {dialogHandlers} from "../hooks/index.js";
 import {resolveTemplate} from "../utils/index.js";
@@ -13,7 +14,7 @@ import { getLogger } from '../utils/logger.js';
 import { buildQuickFilterSeed, mergeQuickFilterValue, withoutQuickFilterParameters } from './viewDialogQuickFilters.js';
 import {evaluatePlainVisibleWhen, trackVisibleWhen} from './visibleWhen.js';
 import {dialogCloseDisabledWhen, isDialogCloseDisabled} from './dialogClose.js';
-import {consumeDialogFocusRevision, dialogFreshFormSeed, shouldFetchDialogOnOpen, shouldRefreshDialogDataSourceForMount} from './viewDialogFreshState.js';
+import {consumeDialogFocusRevision, dialogFreshFormSeed, dialogOpenCacheOptions, shouldFetchDialogOnOpen, shouldRefreshDialogDataSourceForMount} from './viewDialogFreshState.js';
 import MutationCommand from './primitives/MutationCommand.jsx';
 import DisabledActionShell from './DisabledActionShell.jsx';
 
@@ -415,7 +416,7 @@ const ViewDialog = ({context, dialog, focusRequest = 0}) => {
                         log.debug('deferred fetch', { filter, args });
                         dsHandlers?.setInactive?.(false);
                         if (refreshOnOpen) {
-                            dsHandlers?.fetchCollection?.({filter, replaceFilter: true, cache: {bypassCache: true}});
+                            dsHandlers?.fetchCollection?.({filter, replaceFilter: true, cache: dialogOpenCacheOptions(callerProps)});
                         } else {
                             dsHandlers?.setFilter?.({ filter });
                         }
@@ -501,6 +502,10 @@ const ViewDialog = ({context, dialog, focusRequest = 0}) => {
     trackVisibleWhen(closeDisabledWhen, dsCtx);
     const closeDisabled = isDialogCloseDisabled(dialog, dsCtx);
 
+    const contentContext = useMemo(() => fetchOnOpen && dsCtx
+        ? {...dsCtx, initialFetchOwner: dsCtx.identity?.dataSourceId}
+        : dsCtx, [dsCtx, fetchOnOpen]);
+
     if (!dialogOpen || missingDataSourceDefinition) {
         return null;
     }
@@ -573,10 +578,13 @@ const ViewDialog = ({context, dialog, focusRequest = 0}) => {
                     ))}
                 </>) : null}
                 {/* Inline quick-search input above the content for a friendlier UX */}
-                <DialogQuickSearch dsCtx={dsCtx} dialog={dialog} quickFilterSpecs={quickFilterSpecs} />
+                <div style={{display: 'flex', alignItems: 'flex-start', justifyContent: 'flex-end', gap: 8}}>
+                    <DialogQuickSearch dsCtx={dsCtx} dialog={dialog} quickFilterSpecs={quickFilterSpecs} />
+                    {callerProps?.cacheOnOpen === true && dsCtx && <RefreshAction context={dsCtx} item={{id: `${dialog.id}:refresh`, ariaLabel: 'Refresh lookup results', tooltip: 'Refresh lookup results'}} />}
+                </div>
                 <div className={contentClassName} style={contentStyle}>
                     <LayoutRenderer
-                        context={dsCtx}
+                        context={contentContext}
                         container={{dataSourceRef: resolvedDataSourceRef, ...dialog.content}}
                         sizingMode="content"
                     />

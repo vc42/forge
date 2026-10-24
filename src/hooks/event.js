@@ -425,7 +425,8 @@ export const tableHandlers = (context, container) => {
 
     // Explicit authored initialization still runs. Only the implicit fetch must
     // respect the datasource/container owner (for example a derived collection).
-    if (!handlers.onInit.isDefined() && container.fetchData !== false && context.dataSource?.autoFetch !== false) {
+    if (!handlers.onInit.isDefined() && container.fetchData !== false && context.dataSource?.autoFetch !== false
+        && !(context.initialFetchOwner && context.initialFetchOwner === context.identity?.dataSourceId)) {
         handlers.onInit.push({id: "dataSource.fetchCollection"});
     }
     if (!handlers.onRowSelect.isDefined()) {
