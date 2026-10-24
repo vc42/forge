@@ -56,6 +56,7 @@ import { buildReportBuilderHostServices } from './dashboard/reportBuilderHostSer
 import { windowMetadataEndpoint } from './windowMetadataEndpoint.js';
 import {useViewPartition} from './useViewPartition.js';
 import {applyTablePagingMetadata} from '../runtime/tablePagingMetadata.js';
+import {resolveDateRangePreset} from '../packs/blueprint/dateRangePreset.js';
 
 export function reuseShallowEqualRuntimeObject(previous = null, candidate = null) {
     if (!previous || !candidate || typeof previous !== 'object' || typeof candidate !== 'object') {
@@ -218,7 +219,25 @@ export async function applyWindowPermissionMetadata(completeMetadata, {
     });
 }
 
-export function resolveInitialWindowFormValues(metadata) {
+function collectInitialDateRangePresetValues(node, initial, now) {
+    if (!node || typeof node !== 'object') return;
+    for (const item of node.items || []) {
+        if (item?.scope !== 'windowForm' || (item.widget || item.type) !== 'dateRangePreset') continue;
+        const field = item.bindingPath || item.dataField || item.id;
+        const properties = item.properties || {};
+        if (properties.initializeBeforeFetch !== true) continue;
+        // Metric-dependent presets must wait for their datasource, just as the widget does.
+        if (properties.timeZoneSelector || properties.lifetimeStartSelector) continue;
+        const resolved = resolveDateRangePreset(initial[field], now, properties.lifetimeStart, properties.timeZone);
+        if (!resolved) continue; // In particular, keep authored custom dates intact.
+        initial[properties.startField || 'customDateStart'] = resolved.start;
+        initial[properties.endField || 'customDateEnd'] = resolved.end;
+        initial[properties.granularityField || 'granularity'] = resolved.granularity;
+    }
+    for (const child of node.containers || []) collectInitialDateRangePresetValues(child, initial, now);
+}
+
+export function resolveInitialWindowFormValues(metadata, now = new Date()) {
     const windowCfg = metadata?.window || {};
     const onEntries = [
         ...(Array.isArray(windowCfg.on) ? windowCfg.on : []),
@@ -236,6 +255,7 @@ export function resolveInitialWindowFormValues(metadata) {
         }
     }
     collectInitialWindowFormItemValues(metadata?.view?.content || null, initial);
+    collectInitialDateRangePresetValues(metadata?.view?.content || null, initial, now);
     return initial;
 }
 

@@ -705,3 +705,32 @@ describe('owner metadata with presentation-only conditions', () => {
     expect(next.dataSource).toEqual(metadata.dataSource);
   });
 });
+
+
+describe('initial date range preset values', () => {
+  function metadata(period, properties = {}, extra = []) {
+    return {window: {on: [{event: 'onInit', handler: 'dataSource.setWindowFormData', parameters: [
+      {name: 'period', in: 'const', location: period}, ...extra,
+    ]}]}, view: {content: {containers: [{items: [{id: 'period', scope: 'windowForm', type: 'dateRangePreset', properties: {initializeBeforeFetch:true,...properties}}]}]}}};
+  }
+  it('provides the complete rolling month before the first datasource initialization', () => {
+    expect(resolveInitialWindowFormValues(metadata('month'), new Date('2026-10-24T16:00:00Z'))).toEqual({
+      period: 'month', customDateStart: '2026-09-24', customDateEnd: '2026-10-24', granularity: 'day',
+    });
+  });
+  it('uses the widget calendar rules for month boundaries, timezone and custom field bindings', () => {
+    expect(resolveInitialWindowFormValues(metadata('month', {startField:'from', endField:'to', granularityField:'grain', timeZone:'America/New_York'}), new Date('2026-04-01T01:00:00Z'))).toMatchObject({
+      from:'2026-02-28', to:'2026-03-31', grain:'day',
+    });
+  });
+  it('preserves custom ranges and authored granularity', () => {
+    const extra = [{name:'customDateStart',in:'const',location:'2026-10-01'}, {name:'customDateEnd',in:'const',location:'2026-10-03'}, {name:'granularity',in:'const',location:'hour'}];
+    expect(resolveInitialWindowFormValues(metadata('custom', {}, extra))).toEqual({period:'custom',customDateStart:'2026-10-01',customDateEnd:'2026-10-03',granularity:'hour'});
+  });
+  it('keeps legacy date controls unchanged unless initialization is requested', () => {
+    expect(resolveInitialWindowFormValues(metadata('today', {initializeBeforeFetch:false}))).toEqual({period:'today'});
+  });
+  it('does not guess a timezone supplied by metrics', () => {
+    expect(resolveInitialWindowFormValues(metadata('today', {timeZoneSelector:'advertiser.timeZone'}))).toEqual({period:'today'});
+  });
+});

@@ -243,6 +243,31 @@ preset together. Inverted ranges cannot be applied. Closing and reopening the
 popup restores the applied range; choosing a preset also commits its range as
 one update. The partial-data checkbox retains its independent behavior.
 
+A `windowForm` date-range preset can set `properties.initializeBeforeFetch: true`
+to resolve its initial dates and granularity before datasource initialization:
+
+```yaml
+- id: period
+  type: dateRangePreset
+  scope: windowForm
+  dataField: periodView
+  value: month
+  properties:
+    initializeBeforeFetch: true
+    startField: customDateStart
+    endField: customDateEnd
+    granularityField: granularity
+    timeZone: UTC
+```
+
+The preset may also be seeded by an `onInit` `dataSource.setWindowFormData`
+constant. Omit lifecycle assignments that reset the resolved date fields to empty
+strings. Initialization uses the same calendar rules as the widget, including
+month-end clamping and timezone handling. Custom ranges are preserved. Controls
+with `timeZoneSelector` or `lifetimeStartSelector` still wait for their metrics in
+the mounted widget. Existing controls keep their initialization behavior unless
+they enable this option.
+
 Multi-select dropdowns request options through their native text input on focus
 and pointer/keyboard open, using the same per-source lock. Checkbox and pill
 appearances expose a keyboard-focusable group when configured for lazy choices.

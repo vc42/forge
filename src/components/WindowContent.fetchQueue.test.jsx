@@ -1,4 +1,4 @@
-import {expect, it} from 'vitest';
+import {expect, it, vi} from 'vitest';
 import {resolveRequiredDataSourceRefs, resolveDeferredDataSourceRefs, shouldPrimeDataSourceFetch, resolveWindowDataSourceFetchFlag} from './WindowContent.jsx';
 
 it('queues changed parameters during an in-flight read without re-priming the same request', () => {
@@ -90,4 +90,21 @@ it('keeps authored styling keys when navigation uses a full resource URI',async(
   expect(host.querySelector('[data-forge-window-key="advertiser"][data-forge-resource-provider="publisher"]')).not.toBeNull();
   expect(document.body.querySelector('[data-forge-theme-portal][data-forge-window-key="advertiser"][data-forge-resource-namespace="example"]')).not.toBeNull();
  }finally{await React.act(async()=>root.unmount());host.remove();removeSignalsForKey(windowId);globalThis.IS_REACT_ACT_ENVIRONMENT=previousAct;}
+});
+
+
+it('sends one initial read with the resolved date range before mounting its period control',async()=>{
+ const previousAct=globalThis.IS_REACT_ACT_ENVIRONMENT;globalThis.IS_REACT_ACT_ENVIRONMENT=true;
+ vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(new Date('2026-10-24T16:00:00Z'));
+ const React=await import('react');const {createRoot}=await import('react-dom/client');
+ const {default:WindowContent}=await import('./WindowContent.jsx');const {SettingProvider}=await import('../core/context/Setting.jsx');
+ const {removeSignalsForKey}=await import('../core/store/signals.js');await import('../packs/blueprint/index.jsx');
+ const host=document.createElement('div');document.body.append(host);const root=createRoot(host);const windowId='initial-range-read';const reads=[];
+ const transport=async request=>{reads.push({...request.options.inputParameters});return {data:[{id:1,name:'Campaign'}]};};
+ const metadata={window:{on:[{event:'onInit',handler:'dataSource.setWindowFormData',parameters:[{name:'period',in:'const',location:'month'},{name:'granularity',in:'const',location:'day'}]}]},dataSource:{rows:{id:'rows',service:{uri:'mcp://fixture/rows'},parameters:[{name:'Period',in:'windowForm',location:'period'},{name:'Granularity',in:'windowForm',location:'granularity'},{name:'From',in:'windowForm',location:'customDateStart'},{name:'To',in:'windowForm',location:'customDateEnd'}]}},view:{content:{id:'root',dataSourceRef:'rows',fetchData:true,items:[{id:'period',scope:'windowForm',dataField:'period',type:'dateRangePreset',widget:'dateRangePreset',properties:{initializeBeforeFetch:true},options:[{value:'month',label:'Month'}]},{id:'name',type:'label',dataField:'name'}]}}};
+ try {
+  await React.act(async()=>{root.render(<SettingProvider endpoints={{}} connectorConfig={{window:{service:{uri:'/window'}}}} services={{dataConnectorTransport:transport}}><WindowContent window={{windowId,windowKey:'initial-range'}} selectedMetadata={metadata}/></SettingProvider>);for(let i=0;i<60;i++)await Promise.resolve();});
+  expect(reads).toHaveLength(1);
+  expect(reads[0]).toMatchObject({Period:'month',Granularity:'day',From:'2026-09-24',To:'2026-10-24'});
+ } finally {await React.act(async()=>root.unmount());host.remove();removeSignalsForKey(windowId);vi.useRealTimers();globalThis.IS_REACT_ACT_ENVIRONMENT=previousAct;}
 });
